@@ -20,31 +20,39 @@
     var CONFIG = {"hostname":"example.com","root":"/","scheme":"Gemini","version":"7.8.0","exturl":false,"sidebar":{"position":"left","display":"post","padding":18,"offset":12,"onmobile":false},"copycode":{"enable":false,"show_result":false,"style":null},"back2top":{"enable":true,"sidebar":false,"scrollpercent":false},"bookmark":{"enable":false,"color":"#222","save":"auto"},"fancybox":false,"mediumzoom":false,"lazyload":false,"pangu":false,"comments":{"style":"tabs","active":null,"storage":true,"lazyload":false,"nav":null},"algolia":{"hits":{"per_page":10},"labels":{"input_placeholder":"Search for Posts","hits_empty":"We didn't find any results for the search: ${query}","hits_stats":"${hits} results found in ${time} ms"}},"localsearch":{"enable":false,"trigger":"auto","top_n_per_article":1,"unescape":false,"preload":false},"motion":{"enable":true,"async":false,"transition":{"post_block":"fadeIn","post_header":"slideDownIn","post_body":"slideDownIn","coll_header":"slideLeftIn","sidebar":"slideUpIn"}}};
   </script>
 
-  <meta name="description" content="maybe ordinary people don&#39;t always crack">
-<meta property="og:type" content="website">
-<meta property="og:title" content="L1m1t3r&#39;s Blog">
-<meta property="og:url" content="http://example.com/index.html">
+  <meta name="description" content="ptmalloc的设计概述ptmalloc内存管理的设计假设ptmalloc的设计假设是对于ptmalloc的基本行为概述，可以从宏观层面掌握ptmalloc在内存分配中采取的行为。    具有长周期的大内存分配使用mmap^1。 特别大的内存分配总是使用mmap。 具有短周期的内存分配使用brk。 尽量只缓存临时使用的空闲小内存块，对大内存或者长周期的大内存在释放时都直接还给操作系统。 对空闲的">
+<meta property="og:type" content="article">
+<meta property="og:title" content="ptmalloc源码分析笔记">
+<meta property="og:url" content="http://example.com/2022/05/17/ptmalloc%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E7%AC%94%E8%AE%B0/index.html">
 <meta property="og:site_name" content="L1m1t3r&#39;s Blog">
-<meta property="og:description" content="maybe ordinary people don&#39;t always crack">
+<meta property="og:description" content="ptmalloc的设计概述ptmalloc内存管理的设计假设ptmalloc的设计假设是对于ptmalloc的基本行为概述，可以从宏观层面掌握ptmalloc在内存分配中采取的行为。    具有长周期的大内存分配使用mmap^1。 特别大的内存分配总是使用mmap。 具有短周期的内存分配使用brk。 尽量只缓存临时使用的空闲小内存块，对大内存或者长周期的大内存在释放时都直接还给操作系统。 对空闲的">
 <meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="http://example.com/imges/chunk.PNG">
+<meta property="og:image" content="http://example.com/imges/malloc.png">
+<meta property="og:image" content="http://example.com/imges/free.png">
+<meta property="og:image" content="http://example.com/imges/bins.png">
+<meta property="og:image" content="http://example.com/imges/small_bins.png">
+<meta property="article:published_time" content="2022-05-17T04:33:24.000Z">
+<meta property="article:modified_time" content="2022-05-20T18:00:30.176Z">
 <meta property="article:author" content="Limiter">
 <meta property="article:tag" content="ctf,cs,pwn">
 <meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="http://example.com/imges/chunk.PNG">
 
-<link rel="canonical" href="http://example.com/">
+<link rel="canonical" href="http://example.com/2022/05/17/ptmalloc%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E7%AC%94%E8%AE%B0/">
 
 
 <script id="page-configurations">
   // https://hexo.io/docs/variables.html
   CONFIG.page = {
     sidebar: "",
-    isHome : true,
-    isPost : false,
+    isHome : false,
+    isPost : true,
     lang   : 'zh-CN'
   };
 </script>
 
-  <title>L1m1t3r's Blog</title>
+  <title>ptmalloc源码分析笔记 | L1m1t3r's Blog</title>
   
 
 
@@ -143,9 +151,10 @@
         <div class="content-wrap">
           
 
-          <div class="content index posts-expand">
+          <div class="content post posts-expand">
             
-      
+
+    
   
   
   <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
@@ -161,10 +170,9 @@
       <meta itemprop="name" content="L1m1t3r's Blog">
     </span>
       <header class="post-header">
-        <h2 class="post-title" itemprop="name headline">
-          
-            <a href="/2022/05/17/ptmalloc%E6%BA%90%E7%A0%81%E5%88%86%E6%9E%90%E7%AC%94%E8%AE%B0/" class="post-title-link" itemprop="url">ptmalloc源码分析笔记</a>
-        </h2>
+        <h1 class="post-title" itemprop="name headline">
+          ptmalloc源码分析笔记
+        </h1>
 
         <div class="post-meta">
             <span class="post-meta-item">
@@ -194,7 +202,7 @@
     <div class="post-body" itemprop="articleBody">
 
       
-          <h1 id="ptmalloc的设计概述"><a href="#ptmalloc的设计概述" class="headerlink" title="ptmalloc的设计概述"></a>ptmalloc的设计概述</h1><h3 id="ptmalloc内存管理的设计假设"><a href="#ptmalloc内存管理的设计假设" class="headerlink" title="ptmalloc内存管理的设计假设"></a>ptmalloc内存管理的设计假设</h3><p>ptmalloc的设计假设是对于ptmalloc的基本行为概述，可以从宏观层面掌握ptmalloc在内存分配中采取的行为。  </p>
+        <h1 id="ptmalloc的设计概述"><a href="#ptmalloc的设计概述" class="headerlink" title="ptmalloc的设计概述"></a>ptmalloc的设计概述</h1><h3 id="ptmalloc内存管理的设计假设"><a href="#ptmalloc内存管理的设计假设" class="headerlink" title="ptmalloc内存管理的设计假设"></a>ptmalloc内存管理的设计假设</h3><p>ptmalloc的设计假设是对于ptmalloc的基本行为概述，可以从宏观层面掌握ptmalloc在内存分配中采取的行为。  </p>
 <ol>
 <li>具有长周期的大内存分配使用mmap<a href="mmap%E5%92%8Cbrk%E6%98%AF%E4%B8%8D%E5%90%8C%E7%9A%84%E5%88%86%E9%85%8D%E5%86%85%E5%AD%98%E6%96%B9%E5%BC%8F%EF%BC%8Cmmap%E6%98%AF%E9%80%9A%E8%BF%87mmap%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8%E7%9B%B4%E6%8E%A5%E7%94%B3%E8%AF%B7%E4%B8%80%E5%9D%97%E7%A9%BA%E9%97%B4%EF%BC%8C%E8%80%8Cbrk%E6%98%AF%E9%80%9A%E8%BF%87%E7%9B%B4%E6%8E%A5%E6%94%B9%E5%8F%98%E5%86%85%E6%A0%B8%E4%B8%ADmm_struct(%E6%8F%8F%E8%BF%B0%E8%BF%9B%E7%A8%8B%E4%BF%A1%E6%81%AF%E7%9A%84%E7%BB%93%E6%9E%84)%E7%BB%93%E6%9E%84%E4%B8%AD%E7%9A%84brk%E5%80%BC%EF%BC%8C%E6%9D%A5%E6%9B%B4%E6%94%B9heap%E7%9A%84%E8%8C%83%E5%9B%B4%EF%BC%8C%E4%BB%8E%E8%80%8C%E8%8E%B7%E5%BE%97%E6%9B%B4%E5%A4%9A%E7%A9%BA%E9%97%B4%E3%80%82%EF%BC%88%E6%AD%A4%E5%A4%96mmap%E5%9C%A8ptmalloc%E4%B8%AD%E6%80%BB%E6%98%AF%E6%98%A0%E5%B0%84%E5%8C%BF%E5%90%8D%E6%95%B0%E6%8D%AE%E6%AE%B5%EF%BC%89">^1</a>。</li>
 <li>特别大的内存分配总是使用mmap。</li>
@@ -254,145 +262,40 @@
 
 <h4 id="几个对bins的操作宏"><a href="#几个对bins的操作宏" class="headerlink" title="几个对bins的操作宏"></a>几个对bins的操作宏</h4><figure class="highlight c"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br><span class="line">19</span><br><span class="line">20</span><br><span class="line">21</span><br><span class="line">22</span><br><span class="line">23</span><br><span class="line">24</span><br><span class="line">25</span><br><span class="line">26</span><br><span class="line">27</span><br><span class="line">28</span><br><span class="line">29</span><br><span class="line">30</span><br><span class="line">31</span><br><span class="line">32</span><br><span class="line">33</span><br><span class="line">34</span><br><span class="line">35</span><br><span class="line">36</span><br><span class="line">37</span><br><span class="line">38</span><br><span class="line">39</span><br><span class="line">40</span><br><span class="line">41</span><br><span class="line">42</span><br><span class="line">43</span><br><span class="line">44</span><br><span class="line">45</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">typedef</span> <span class="class"><span class="keyword">struct</span> <span class="title">malloc_chunk</span>* <span class="title">mbinptr</span>;</span><span class="comment">/*后面的源代码常用这里的定义，建议记住</span></span><br><span class="line"><span class="comment">是malloc_bin_pointer的简写，前面讲过了bin的访问方式*/</span></span><br><span class="line"><span class="comment">/* addressing -- note that bin_at(0) does not exist </span></span><br><span class="line"><span class="comment">通过index返回bin的地址，注意，bin_at(0)不存在*/</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> bin_at(m, i) \<span class="comment">/*m是malloc_state结构体指针，后面会讲，这里面放着bins数组，i就是传入的index*/</span></span></span><br><span class="line"> (mbinptr) (((<span class="type">char</span> *) &amp;((m)-&gt;bins[((i) - <span class="number">1</span>) * <span class="number">2</span>])) \</span><br><span class="line"> - offsetof (<span class="keyword">struct</span> malloc_chunk, fd))<span class="comment">/*这个offsetof前面也有讲过，这段代码仔细看看就理解了*/</span></span><br><span class="line"><span class="comment">/* 返回b指向bin的下一个bin的指针 */</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> next_bin(b) ((mbinptr)((char*)(b) + (sizeof(mchunkptr)&lt;&lt;1)))<span class="comment">/*sizeof（mchunkptr）&lt;&lt;1其实就是8&lt;&lt;1 == 16,正好是两个bin之间的距离*/</span></span></span><br><span class="line"><span class="comment">/* Reminders about list directionality within bins </span></span><br><span class="line"><span class="comment">bin中的第一个chunk和最后一个chunk*/</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> first(b) ((b)-&gt;fd)</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> last(b) ((b)-&gt;bk)<span class="comment">/*bin维护的是双向链表哦*/</span></span></span><br><span class="line"><span class="comment">/* Take a chunk off a bin list </span></span><br><span class="line"><span class="comment">将一个chunk从bin维护的双向链表中摘下*/</span></span><br><span class="line"><span class="meta">#<span class="keyword">define</span> unlink(P, BK, FD) &#123; \<span class="comment">/*这里传BK和FD就是为了让你传个载体，毕竟宏里面不好定义新变量*/</span></span></span><br><span class="line"> FD = P-&gt;fd; \</span><br><span class="line"> BK = P-&gt;bk; \</span><br><span class="line"> <span class="keyword">if</span> (__builtin_expect (FD-&gt;bk != P || BK-&gt;fd != P, <span class="number">0</span>)) \<span class="comment">/*这是一个判断宏，__builtin_expect(a,b),若a == b则返回1，这里就是判断传入的p所指向的chunk是否真的在双向链表中*/</span></span><br><span class="line"> malloc_printerr (check_action, <span class="string">&quot;corrupted double-linked list&quot;</span>, P); \<span class="comment">/*打印错误信息*/</span></span><br><span class="line"> <span class="keyword">else</span> &#123; \</span><br><span class="line"> FD-&gt;bk = BK; \</span><br><span class="line"> BK-&gt;fd = FD; \<span class="comment">/*将chunk取出*/</span></span><br><span class="line"> <span class="keyword">if</span> (!in_smallbin_range (P-&gt;size) \</span><br><span class="line"> &amp;&amp; __builtin_expect (P-&gt;fd_nextsize != <span class="literal">NULL</span>, <span class="number">0</span>)) &#123; \<span class="comment">/*若P所指向的chunk不在small bin中且该chunk有fd_nextsize指针（说明是large chunk）*/</span></span><br><span class="line"> <span class="comment">/*以下是当为large chunk时，还需要做的操作（从横向循环链表中删除）*/</span></span><br><span class="line"> assert (P-&gt;fd_nextsize-&gt;bk_nextsize == P); \</span><br><span class="line"> assert (P-&gt;bk_nextsize-&gt;fd_nextsize == P); \</span><br><span class="line"> <span class="keyword">if</span> (FD-&gt;fd_nextsize == <span class="literal">NULL</span>) &#123; \</span><br><span class="line"> <span class="keyword">if</span> (P-&gt;fd_nextsize == P) \</span><br><span class="line"> FD-&gt;fd_nextsize = FD-&gt;bk_nextsize = FD; \</span><br><span class="line"> <span class="keyword">else</span> &#123; \</span><br><span class="line"> FD-&gt;fd_nextsize = P-&gt;fd_nextsize; \</span><br><span class="line"> FD-&gt;bk_nextsize = P-&gt;bk_nextsize; \</span><br><span class="line"> P-&gt;fd_nextsize-&gt;bk_nextsize = FD; \</span><br><span class="line"> P-&gt;bk_nextsize-&gt;fd_nextsize = FD; \</span><br><span class="line"> &#125; \</span><br><span class="line"> &#125; <span class="keyword">else</span> &#123; \</span><br><span class="line"> P-&gt;fd_nextsize-&gt;bk_nextsize = P-&gt;bk_nextsize; \</span><br><span class="line"> P-&gt;bk_nextsize-&gt;fd_nextsize = P-&gt;fd_nextsize; \</span><br><span class="line"> &#125; \</span><br><span class="line"> &#125; \</span><br><span class="line"> &#125; \</span><br><span class="line">&#125;</span><br><span class="line"></span><br></pre></td></tr></table></figure>
 
-      
     </div>
 
     
     
     
+
+<div>
+  
+    <div>
+    
+        <div style="text-align:center;color: #ccc;font-size:14px;">'''没有了哦=V='''</div>
+    
+</div>
+  
+</div>
+
       <footer class="post-footer">
-        <div class="post-eof"></div>
-      </footer>
-  </article>
-  
-  
-  
 
-      
-  
-  
-  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
-    <link itemprop="mainEntityOfPage" href="http://example.com/2022/05/16/cs_major/">
+        
 
-    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
-      <meta itemprop="image" content="/images/doge.jpg">
-      <meta itemprop="name" content="Limiter">
-      <meta itemprop="description" content="maybe ordinary people don't always crack">
-    </span>
 
-    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
-      <meta itemprop="name" content="L1m1t3r's Blog">
-    </span>
-      <header class="post-header">
-        <h2 class="post-title" itemprop="name headline">
-          
-            <a href="/2022/05/16/cs_major/" class="post-title-link" itemprop="url">CS作业预测及解析</a>
-        </h2>
-
-        <div class="post-meta">
-            <span class="post-meta-item">
-              <span class="post-meta-item-icon">
-                <i class="far fa-calendar"></i>
-              </span>
-              <span class="post-meta-item-text">发表于</span>
-              
-
-              <time title="创建时间：2022-05-16 13:17:38 / 修改时间：17:47:06" itemprop="dateCreated datePublished" datetime="2022-05-16T13:17:38+08:00">2022-05-16</time>
-            </span>
-
-          
-
-        </div>
-      </header>
-
-    
-    
-    
-    <div class="post-body" itemprop="articleBody">
-
-      
-          <h2 id="写在前面"><a href="#写在前面" class="headerlink" title="写在前面"></a>写在前面</h2><p>今年的预测难度可谓是大的离谱，当我看到x队，黑豹和小火苗这些强队被绿龙打的毫无换手之力时，我就知道这届比赛必定是爆冷连连。果不其然，失去了阿汤哥的NIP竟然开始发挥，3爷的狙也逐渐变得离谱，在加上小蜜蜂的疯狂拉跨，相信很多人的作业已经是接近凉凉。<br>不过好在navi依然稳的一比，直接3：0晋级（不会有人没选navi吧），让大多数人有了一丝机会。以下是剩余队伍的获胜概率分析，以及什么样的作业可以挺过这一轮恐怖的传奇组比赛。</p>
-<h2 id="以下是我认为接下来比较可能晋级的队伍"><a href="#以下是我认为接下来比较可能晋级的队伍" class="headerlink" title="以下是我认为接下来比较可能晋级的队伍"></a>以下是我认为接下来比较可能晋级的队伍</h2><h3 id="X队（Heroic）"><a href="#X队（Heroic）" class="headerlink" title="X队（Heroic）"></a>X队（Heroic）</h3><p>最近几场比赛x队的发挥都一如既往的稳定，输给绿龙完全是因为绿龙发挥过于离谱，而且是bo1赛制，具有一定的运气成分。尼的步枪一直很刚，加上卡点也开始发挥，尤其是对战G2的比赛，在大比分落后且被G2先拿到赛点，以及处于打匪的劣势的情况下稳住心态，逐步反超，可见其无论是战术还是枪法心态都处于非常不错的状态。因此x队的晋级似乎是必然的。</p>
-<h3 id="黑豹"><a href="#黑豹" class="headerlink" title="黑豹"></a>黑豹</h3><p>黑豹作为一支非常规战术以及个人能力都十分出色的战队，在传奇组的关键比赛中将要对战状态正好的NIP，NIP在对战navi之前可谓是风头极盛，但在与navi的比赛中被打击了一下。假如NIP的这次挫败并没有影响他们的火热手感，那么当前状态的黑豹是很难获胜的，除非arT和优瑞这两名大哥超常发挥，（尤其是arT）在非常规和干摸绕后中狠狠的偷NIP的屁股以打击他们的心态和手感。</p>
-<h3 id="G2"><a href="#G2" class="headerlink" title="G2"></a>G2</h3><p>G2最近的两场落败都令人十分惋惜，无论是面对navi还是Heroic，都在jackz和表哥的发挥下打出了很大的优势，反观NIKO，已经很长时间没有发挥了，可以从NIKO多次的白给中发现其心态有些问题，似乎小李子的战术布局让NIKO的个人能力不能很好的发挥，并且在开局掉人或陷入劣势的情况下，NIKO希望凭借个人能力创造机会，从而更容易白给，使队友残局变得异常困难，我个人认为是monesy并没有完全弥补G2狙击手的短板，虽然年仅17岁的他操作犀利，上限极高，而且常常在残局1Vn，但在每局比赛中的开局打的过于稳建，在场上的站位也有些死板，并非是说monesy的实力和意识不足，从他的日常训练视频中可以看出他不逊色于s1mple的狙击技术和灵性。但在比赛时，过于年轻的monesy害怕由于自己的死亡而拖累队友，因此打的比较保守，反而在残局阶段和eco或强起时释放自我，往往打出逆天操作。今晚的G2对阵VP可以说只要G2不犯病或者被连续的失败打击了状态，基本是稳赢。但要想晋级，则需要和剩下的强队较量一番，以其实力来说是没有问题的，但G2的发挥和赛点犯病总是令人担忧。</p>
-<h3 id="Faze"><a href="#Faze" class="headerlink" title="Faze"></a>Faze</h3><p>刚战胜的宿敌C9的Faze状态正好，只能说今晚战胜小火苗晋级是必然的事，选Faze是必然稳的（Faze输了的话就当我是sb）</p>
-<h3 id="C9"><a href="#C9" class="headerlink" title="C9"></a>C9</h3><p>作为红星的躯壳，C9的复活似乎正是为了阻止Faze夺冠而来，无论是队伍实力还是情怀问题，选C9是不用犹豫的。</p>
-<h3 id="NIP"><a href="#NIP" class="headerlink" title="NIP"></a>NIP</h3><p>NIP最近的发挥太离谱了，只能说他们不晋级的似乎是不可能的事情</p>
-<h2 id="关于作业通过的概率"><a href="#关于作业通过的概率" class="headerlink" title="关于作业通过的概率"></a>关于作业通过的概率</h2><p>假如和我一样，在晋级队伍中选择了navi，G2，Faze，Heroic，黑豹，C9，小蜜蜂，<br>那么目前为止，navi已经成功晋级，小蜜蜂，G2和c9目前是1&#x2F;2的状态，G2的实力是很强的，若不是遇到navi状态正好，和自己的失误是不会沦落至此的，晋级的概率大概有60%，黑豹今晚不能晋级的话接下来就比较困难了，暂时算作50%概率晋级，Heroic和Faze还是比较稳的，即使失败，接下来对阵的队伍要么很拉，要么是已经选择的队伍，那么必定会有一支成功晋级，加上bNE 0&#x2F;3拯救无数人，如今仅仅需要3次竞猜成功就能及格，关键就在于今晚的比赛Faze，Heroic，黑豹三支队伍，只要有两只能成功晋级，那么及格就稳了，假如仅一支晋级，那么也有很大概率及格，如果三支队伍都晋级失败，那么就只能听天由命了。<br>希望他们不要辜负bNE给大家的机会</p>
-
-      
+        
+    <div class="post-nav">
+      <div class="post-nav-item">
+    <a href="/2022/05/16/cs_major/" rel="prev" title="CS作业预测及解析">
+      <i class="fa fa-chevron-left"></i> CS作业预测及解析
+    </a></div>
+      <div class="post-nav-item"></div>
     </div>
-
-    
-    
-    
-      <footer class="post-footer">
-        <div class="post-eof"></div>
       </footer>
+    
   </article>
   
   
-  
-
-      
-  
-  
-  <article itemscope itemtype="http://schema.org/Article" class="post-block" lang="zh-CN">
-    <link itemprop="mainEntityOfPage" href="http://example.com/2022/05/16/hello-world/">
-
-    <span hidden itemprop="author" itemscope itemtype="http://schema.org/Person">
-      <meta itemprop="image" content="/images/doge.jpg">
-      <meta itemprop="name" content="Limiter">
-      <meta itemprop="description" content="maybe ordinary people don't always crack">
-    </span>
-
-    <span hidden itemprop="publisher" itemscope itemtype="http://schema.org/Organization">
-      <meta itemprop="name" content="L1m1t3r's Blog">
-    </span>
-      <header class="post-header">
-        <h2 class="post-title" itemprop="name headline">
-          
-            <a href="/2022/05/16/hello-world/" class="post-title-link" itemprop="url">welcome!</a>
-        </h2>
-
-        <div class="post-meta">
-            <span class="post-meta-item">
-              <span class="post-meta-item-icon">
-                <i class="far fa-calendar"></i>
-              </span>
-              <span class="post-meta-item-text">发表于</span>
-              
-
-              <time title="创建时间：2022-05-16 13:00:03 / 修改时间：17:50:49" itemprop="dateCreated datePublished" datetime="2022-05-16T13:00:03+08:00">2022-05-16</time>
-            </span>
-
-          
-
-        </div>
-      </header>
-
-    
-    
-    
-    <div class="post-body" itemprop="articleBody">
-
-      
-          <h1 id="水水水水水"><a href="#水水水水水" class="headerlink" title="水水水水水"></a>水水水水水</h1>
-      
-    </div>
-
-    
-    
-    
-      <footer class="post-footer">
-        <div class="post-eof"></div>
-      </footer>
-  </article>
-  
-  
-  
-
-
   
 
 
@@ -445,6 +348,7 @@
 
       <!--noindex-->
       <div class="post-toc-wrap sidebar-panel">
+          <div class="post-toc motion-element"><ol class="nav"><li class="nav-item nav-level-1"><a class="nav-link" href="#ptmalloc%E7%9A%84%E8%AE%BE%E8%AE%A1%E6%A6%82%E8%BF%B0"><span class="nav-number">1.</span> <span class="nav-text">ptmalloc的设计概述</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#ptmalloc%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E7%9A%84%E8%AE%BE%E8%AE%A1%E5%81%87%E8%AE%BE"><span class="nav-number">1.0.1.</span> <span class="nav-text">ptmalloc内存管理的设计假设</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E7%9A%84%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84"><span class="nav-number">1.0.2.</span> <span class="nav-text">内存管理的数据结构</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#Main-arena-%E4%B8%8E-non-main-arena"><span class="nav-number">1.0.2.1.</span> <span class="nav-text">Main_arena 与 non_main_arena</span></a></li></ol></li><li class="nav-item nav-level-3"><a class="nav-link" href="#chunk"><span class="nav-number">1.0.3.</span> <span class="nav-text">chunk</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E7%A9%BA%E9%97%B2chunk%E7%9A%84%E5%AE%B9%E5%99%A8"><span class="nav-number">1.0.4.</span> <span class="nav-text">空闲chunk的容器</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#sbrk%E4%B8%8Emmap"><span class="nav-number">1.0.5.</span> <span class="nav-text">sbrk与mmap</span></a></li></ol></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#%E5%86%85%E5%AD%98%E5%88%86%E9%85%8D%E6%A6%82%E8%BF%B0"><span class="nav-number">2.</span> <span class="nav-text">内存分配概述</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#%E7%94%A8%E5%A6%82%E4%B8%8B%E7%9A%84%E5%9B%BE%E6%9D%A5%E6%8F%8F%E8%BF%B0malloc%E7%9A%84%E6%B5%81%E7%A8%8B%EF%BC%9A"><span class="nav-number">2.0.1.</span> <span class="nav-text">用如下的图来描述malloc的流程：</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E7%94%A8%E5%A6%82%E4%B8%8B%E5%9B%BE%E6%9D%A5%E6%8F%8F%E8%BF%B0free%E7%9A%84%E6%B5%81%E7%A8%8B%EF%BC%9A"><span class="nav-number">2.0.2.</span> <span class="nav-text">用如下图来描述free的流程：</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#%E5%85%B6%E4%BB%96"><span class="nav-number">2.0.3.</span> <span class="nav-text">其他</span></a></li></ol></li></ol></li><li class="nav-item nav-level-1"><a class="nav-link" href="#ptmalloc%E7%9A%84%E6%BA%90%E4%BB%A3%E7%A0%81%E5%88%86%E6%9E%90-gt-lt"><span class="nav-number">3.</span> <span class="nav-text">ptmalloc的源代码分析(&gt;_&lt;)</span></a><ol class="nav-child"><li class="nav-item nav-level-3"><a class="nav-link" href="#chunk%E5%8F%8A%E5%85%B6%E7%9B%B8%E5%85%B3%E5%AE%8F%E5%92%8C%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84%E7%9A%84%E5%A3%B0%E6%98%8E"><span class="nav-number">3.0.1.</span> <span class="nav-text">chunk及其相关宏和数据结构的声明</span></a></li><li class="nav-item nav-level-3"><a class="nav-link" href="#bins%E5%8F%8A%E5%85%B6%E7%9B%B8%E5%85%B3%E6%BA%90%E7%A0%81%E8%A7%A3%E6%9E%90"><span class="nav-number">3.0.2.</span> <span class="nav-text">bins及其相关源码解析</span></a><ol class="nav-child"><li class="nav-item nav-level-4"><a class="nav-link" href="#Small-bins"><span class="nav-number">3.0.2.1.</span> <span class="nav-text">Small bins</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#Large-bins"><span class="nav-number">3.0.2.2.</span> <span class="nav-text">Large bins</span></a></li><li class="nav-item nav-level-4"><a class="nav-link" href="#%E5%87%A0%E4%B8%AA%E5%AF%B9bins%E7%9A%84%E6%93%8D%E4%BD%9C%E5%AE%8F"><span class="nav-number">3.0.2.3.</span> <span class="nav-text">几个对bins的操作宏</span></a></li></ol></li></ol></li></ol></li></ol></div>
       </div>
       <!--/noindex-->
 
